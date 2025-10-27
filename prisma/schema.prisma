@@ -1,0 +1,340 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  APPLICANT
+  APPROVER_L1
+  APPROVER_L2
+  ADMIN
+}
+
+enum RequestStatus {
+  DRAFT
+  SUBMITTED
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+  CHANGES_REQUESTED
+  EXPIRED
+}
+
+enum RequestPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum RequestType {
+  NEW_ACCOUNT
+  EXISTING_ACCOUNT
+  LOCK_ACCOUNT
+}
+
+enum ApplicationEnvironment {
+  PROD
+  TEST
+  BOTH
+}
+
+enum FieldType {
+  TEXT
+  SELECT
+  CHECKBOX
+  DATE
+  NUMBER
+  EMAIL
+  PHONE
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CHANGES_REQUESTED
+  DELEGATED
+  EXPIRED
+}
+
+enum ApprovalAction {
+  APPROVE
+  REJECT
+  REQUEST_CHANGES
+  DELEGATE
+}
+
+enum ApproverType {
+  SPECIFIC_USER
+  ROLE_BASED
+  DEPARTMENT_MANAGER
+  SUPERVISOR_OF_REQUESTER
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  APPROVE
+  REJECT
+  LOGIN
+  LOGOUT
+  PASSWORD_CHANGE
+  DELEGATE
+}
+
+enum EntityType {
+  USER
+  APPLICATION
+  APPLICATION_REQUEST
+  APPROVAL_STEP
+  APPLICATION_ROLE
+}
+
+enum NotificationType {
+  REQUEST_SUBMITTED
+  APPROVAL_REQUIRED
+  REQUEST_APPROVED
+  REQUEST_REJECTED
+  CHANGES_REQUESTED
+  DELEGATION_ASSIGNED
+}
+
+model User {
+  id                    String    @id @default(uuid())
+  email                 String    @unique
+  employeeId            String    @unique @map("employee_id")
+  firstName             String    @map("first_name")
+  lastName              String    @map("last_name")
+  department            String
+  division              String?
+  workPhone             String    @map("work_phone")
+  supervisorName        String    @map("supervisor_name")
+  supervisorEmail       String    @map("supervisor_email")
+  role                  UserRole
+  isActive              Boolean   @default(true) @map("is_active")
+  lastLoginAt           DateTime? @map("last_login_at")
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  // Security fields
+  passwordHash          String    @map("password_hash")
+  mfaEnabled            Boolean   @default(false) @map("mfa_enabled")
+  mfaSecret             String?   @map("mfa_secret")
+  failedLoginAttempts   Int       @default(0) @map("failed_login_attempts")
+  lockedUntil           DateTime? @map("locked_until")
+
+  // Relations
+  requests              ApplicationRequest[]
+  approvalSteps         ApprovalStep[]
+  delegatedSteps        ApprovalStep[] @relation("DelegatedApprovals")
+  auditLogs             AuditLog[]
+  notifications         Notification[]
+  createdApplications   Application[] @relation("CreatedApplications")
+  updatedApplications   Application[] @relation("UpdatedApplications")
+  createdRequests       ApplicationRequest[] @relation("CreatedRequests")
+  updatedRequests       ApplicationRequest[] @relation("UpdatedRequests")
+
+  @@index([email])
+  @@index([employeeId])
+  @@map("users")
+}
+
+model Application {
+  id                    String    @id @default(uuid())
+  name                  String
+  code                  String    @unique
+  description           String
+  isActive              Boolean   @default(true) @map("is_active")
+  requiresApproval      Boolean   @default(true) @map("requires_approval")
+  minApprovalLevels     Int       @map("min_approval_levels")
+  maxApprovalLevels     Int       @map("max_approval_levels")
+  approvalWorkflow      Json      @map("approval_workflow")
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+  createdById           String    @map("created_by_id")
+  updatedById           String    @map("updated_by_id")
+
+  // Relations
+  customFields          ApplicationField[]
+  roles                 ApplicationRole[]
+  requests              ApplicationRequest[]
+  createdBy             User @relation("CreatedApplications", fields: [createdById], references: [id])
+  updatedBy             User @relation("UpdatedApplications", fields: [updatedById], references: [id])
+
+  @@index([code])
+  @@index([isActive])
+  @@map("applications")
+}
+
+model ApplicationField {
+  id              String      @id @default(uuid())
+  applicationId   String      @map("application_id")
+  name            String
+  type            FieldType
+  label           String
+  required        Boolean
+  options         String[]
+  validation      Json?
+  order           Int
+  createdAt       DateTime    @default(now()) @map("created_at")
+  updatedAt       DateTime    @updatedAt @map("updated_at")
+
+  // Relations
+  application     Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@index([applicationId])
+  @@map("application_fields")
+}
+
+model ApplicationRole {
+  id              String      @id @default(uuid())
+  applicationId   String      @map("application_id")
+  name            String
+  description     String
+  permissions     String[]
+  isActive        Boolean     @default(true) @map("is_active")
+  createdAt       DateTime    @default(now()) @map("created_at")
+  updatedAt       DateTime    @updatedAt @map("updated_at")
+
+  // Relations
+  application     Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@index([applicationId])
+  @@map("application_roles")
+}
+
+model ApplicationRequest {
+  id                String              @id @default(uuid())
+  requestNumber     String              @unique @map("request_number")
+  userId            String              @map("user_id")
+  applicationId     String              @map("application_id")
+  status            RequestStatus
+  priority          RequestPriority     @default(MEDIUM)
+  requestType       RequestType         @map("request_type")
+  environment       ApplicationEnvironment
+  justification     String
+  requestedRoles    String[]            @map("requested_roles")
+  fieldValues         Json                @map("field_values")
+  currentLevel      Int                 @default(1) @map("current_level")
+  totalLevels       Int                 @map("total_levels")
+  approvalChain     Json                @map("approval_chain")
+  submittedAt       DateTime?           @map("submitted_at")
+  completedAt       DateTime?           @map("completed_at")
+  expiresAt         DateTime?           @map("expires_at")
+  createdAt         DateTime            @default(now()) @map("created_at")
+  updatedAt         DateTime            @updatedAt @map("updated_at")
+  createdById       String              @map("created_by_id")
+  updatedById       String              @map("updated_by_id")
+
+  // Relations
+  user              User @relation(fields: [userId], references: [id])
+  application       Application @relation(fields: [applicationId], references: [id])
+  approvalSteps     ApprovalStep[]
+  auditLogs         AuditLog[]
+  createdBy         User @relation("CreatedRequests", fields: [createdById], references: [id])
+  updatedBy         User @relation("UpdatedRequests", fields: [updatedById], references: [id])
+
+  @@index([userId])
+  @@index([applicationId])
+  @@index([status])
+  @@index([submittedAt])
+  @@index([requestNumber])
+  @@map("application_requests")
+}
+
+model ApprovalStep {
+  id              String          @id @default(uuid())
+  requestId       String          @map("request_id")
+  level           Int
+  stepOrder       Int             @map("step_order")
+  approverId      String          @map("approver_id")
+  status          ApprovalStatus  @default(PENDING)
+  action          ApprovalAction?
+  comments        String?
+  delegatedToId   String?         @map("delegated_to_id")
+  assignedAt      DateTime        @default(now()) @map("assigned_at")
+  actionAt        DateTime?       @map("action_at")
+  dueAt           DateTime?       @map("due_at")
+  createdAt       DateTime        @default(now()) @map("created_at")
+  updatedAt       DateTime        @updatedAt @map("updated_at")
+
+  // Relations
+  request         ApplicationRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  approver        User @relation(fields: [approverId], references: [id])
+  delegatedTo     User? @relation("DelegatedApprovals", fields: [delegatedToId], references: [id])
+
+  @@index([requestId])
+  @@index([approverId])
+  @@index([status])
+  @@index([level])
+  @@map("approval_steps")
+}
+
+model AuditLog {
+  id              String      @id @default(uuid())
+  userId          String      @map("user_id")
+  action          AuditAction
+  entityType      EntityType  @map("entity_type")
+  entityId        String      @map("entity_id")
+  oldValues       Json?       @map("old_values")
+  newValues       Json?       @map("new_values")
+  metadata        Json?
+  ipAddress       String      @map("ip_address")
+  userAgent       String      @map("user_agent")
+  timestamp       DateTime    @default(now())
+  hash            String
+  previousHash    String?     @map("previous_hash")
+  requestId       String?     @map("request_id")
+
+  // Relations
+  user            User @relation(fields: [userId], references: [id])
+  request         ApplicationRequest? @relation(fields: [requestId], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([timestamp])
+  @@index([userId])
+  @@index([requestId])
+  @@map("audit_logs")
+}
+
+model Notification {
+  id              String              @id @default(uuid())
+  userId          String              @map("user_id")
+  type            NotificationType
+  title           String
+  message         String
+  data            Json?
+  isRead          Boolean             @default(false) @map("is_read")
+  emailSent       Boolean             @default(false) @map("email_sent")
+  emailSentAt     DateTime?           @map("email_sent_at")
+  readAt          DateTime?           @map("read_at")
+  createdAt       DateTime            @default(now()) @map("created_at")
+
+  // Relations
+  user            User @relation(fields: [userId], references: [id])
+
+  @@index([userId, isRead])
+  @@index([createdAt])
+  @@map("notifications")
+}
+
+// Views for reporting (optional, can be created later)
+// view ApplicationRequestStatus {
+//   requestId     String
+//   status        RequestStatus
+//   currentLevel  Int
+//   totalLevels   Int
+//   submittedAt   DateTime
+//   completedAt   DateTime?
+//
+//   @@map("application_request_status_view")
+// }
