@@ -3,8 +3,12 @@ node_modules/
 .pnp
 .pnp.js
 
-
+# AI documents
 CLAUDE.md
+.claude/
+.specify/
+specs/
+
 # Testing
 coverage/
 *.lcov
